@@ -4,6 +4,9 @@
   "functions": {
     "api/index.js": {
       "includeFiles": "node_modules/tiny-secp256k1/lib/*.wasm"
+    },
+    "server.js": {
+      "includeFiles": "node_modules/tiny-secp256k1/lib/*.wasm"
     }
   },
   "rewrites": [
