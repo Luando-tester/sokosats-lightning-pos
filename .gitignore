@@ -1,0 +1,4 @@
+node_modules/
+.env
+.merchant_wallet.secret.json
+*.log

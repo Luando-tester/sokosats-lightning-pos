@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SokoSats — AI & Lightning POS</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #f59e0b;
+      --green: #10b981;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 12px;
+      line-height: 1.4;
+    }
+    .wrap { max-width: 520px; margin: 0 auto; }
+    .header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+    }
+    .badge {
+      font-size: 11px; padding: 3px 8px; border-radius: 999px;
+      background: #064e3b; color: #34d399; font-weight: 700;
+    }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px; margin-bottom: 12px;
+    }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    input, textarea, select {
+      width: 100%; padding: 10px; border-radius: 8px;
+      border: 1px solid var(--border); background: #0b1120;
+      color: var(--text); font-size: 14px; margin-bottom: 8px;
+    }
+    .row { display: flex; gap: 8px; }
+    .btn {
+      width: 100%; padding: 12px; border: none; border-radius: 8px;
+      font-weight: 700; font-size: 14px; cursor: pointer;
+    }
+    .btn-primary { background: var(--accent); color: #0b1120; }
+    .btn-green { background: var(--green); color: #052e16; }
+    .btn-webln { background: #3b82f6; color: #ffffff; margin-top: 8px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .chip {
+      background: #0b1120; border: 1px solid var(--border); color: var(--text);
+      padding: 6px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+    }
+    .qr-box {
+      background: #ffffff; padding: 12px; border-radius: 8px;
+      text-align: center; margin: 10px 0;
+    }
+    .bolt11 {
+      width: 100%; font-family: monospace; font-size: 11px;
+      background: #0b1120; color: #cbd5e1; padding: 8px;
+      border-radius: 6px; word-break: break-all; border: 1px solid var(--border);
+    }
+    .err { color: #fca5a5; background: #450a0a; padding: 8px; border-radius: 6px; font-size: 13px; }
+    .meta { font-size: 11px; color: var(--muted); word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div>
+        <strong style="font-size:18px; color:#f59e0b;">⚡ SokoSats POS</strong>
+        <div class="meta" id="rateInfo">Chargement taux BTC...</div>
+      </div>
+      <span class="badge" id="netBadge">LNURL LIVE</span>
+    </div>
+
+    <!-- Merchant Wallet Config -->
+    <div class="card">
+      <label for="lnAddr">Lightning Address du Commerçant (LNURL-pay réel)</label>
+      <input id="lnAddr" type="text" placeholder="ex: votre_nom@getalby.com" />
+      <div class="meta" id="onchainInfo">Wallet BIP84: ...</div>
+    </div>
+
+    <!-- AI Quick Order -->
+    <div class="card">
+      <label>Articles rapides (Marché Dakar / Lagos / Nairobi)</label>
+      <div class="chips" id="seedChips"></div>
+
+      <label for="orderText">Commande vocale / texte (Français, English, Wolof)</label>
+      <div class="row">
+        <textarea id="orderText" rows="2" placeholder="Ex: 2kg riz 1300 CFA, 1 huile 1100 CFA"></textarea>
+        <select id="currency" style="width:95px;">
+          <option value="XOF">XOF</option>
+          <option value="NGN">NGN</option>
+          <option value="KES">KES</option>
+          <option value="USD">USD</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="btnQuote" onclick="calculateQuote()">
+        1. Calculer avec AI (Convertir en Sats)
+      </button>
+
+      <div id="quoteBox" style="display:none; margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+        <div id="itemsList" style="font-size:13px; margin-bottom:8px;"></div>
+        <div style="font-size:18px; font-weight:700; color:#34d399; margin-bottom:8px;">
+          Total: <span id="totalSats">0</span> sats
+        </div>
+        <button class="btn btn-green" id="btnInvoice" onclick="createLightningInvoice()">
+          2. Générer Facture Lightning (BOLT11)
+        </button>
+      </div>
+    </div>
+
+    <div id="errorBox" class="err" style="display:none; margin-bottom:12px;"></div>
+
+    <!-- Real BOLT11 Invoice Output -->
+    <div class="card" id="invoiceCard" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong>Facture Lightning Prête</strong>
+        <span class="badge" id="invSatsBadge">0 sats</span>
+      </div>
+      <div class="qr-box" id="qrContainer"></div>
+      <div class="bolt11" id="bolt11Text"></div>
+      <button class="btn btn-primary" style="margin-top:8px;" onclick="copyBolt11()">
+        Copier BOLT11 Invoice
+      </button>
+      <button class="btn btn-webln" id="btnWebLN" onclick="payWithWebLN()">
+        ⚡ Payer via Wallet Navigateur (WebLN / Alby)
+      </button>
+    </div>
+  </div>
+
+  <script>
+    let currentSats = 0;
+    let currentBolt11 = "";
+
+    async function init() {
+      try {
+        const res = await fetch("/api/health");
+        const data = await res.json();
+        document.getElementById("lnAddr").value = data.defaultLightningAddress || "";
+        document.getElementById("rateInfo").textContent = `1 BTC = $${Number(data.btcUsd).toLocaleString()}`;
+        document.getElementById("netBadge").textContent = `BTC ${data.wallet.network.toUpperCase()}`;
+        document.getElementById("onchainInfo").textContent =
+          `Backup BIP84 (${data.wallet.derivationPath}): ${data.wallet.onchainAddress}`;
+
+        const chips = document.getElementById("seedChips");
+        (data.seedCatalog || []).forEach((item) => {
+          const btn = document.createElement("button");
+          btn.className = "chip";
+          btn.textContent = `+ ${item.name} (${item.localPrice} ${item.currency})`;
+          btn.onclick = () => {
+            const box = document.getElementById("orderText");
+            box.value = box.value ? `${box.value}, ${item.name} ${item.localPrice} ${item.currency}` : `${item.name} ${item.localPrice} ${item.currency}`;
+          };
+          chips.appendChild(btn);
+        });
+      } catch (e) {
+        showError("Erreur de connexion au serveur: " + e.message);
+      }
+    }
+
+    function showError(msg) {
+      const el = document.getElementById("errorBox");
+      el.textContent = msg;
+      el.style.display = msg ? "block" : "none";
+    }
+
+    async function calculateQuote() {
+      showError("");
+      const text = document.getElementById("orderText").value.trim();
+      const currency = document.getElementById("currency").value;
+      if (!text) return showError("Entrez au moins un article ou montant.");
+
+      const btn = document.getElementById("btnQuote");
+      btn.disabled = true;
+      btn.textContent = "Analyse AI...";
+
+      try {
+        const res = await fetch("/api/ai-quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, currency }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Erreur AI");
+
+        currentSats = data.totalSats;
+        document.getElementById("totalSats").textContent = currentSats.toLocaleString();
+        document.getElementById("itemsList").innerHTML =
+          `<div class="meta" style="margin-bottom:4px;">Mode: ${data.parserMode}</div>` +
+          data.items.map((i) => `• ${i.name}: ${i.amount} ${i.currency} → <b>${i.sats} sats</b>`).join("<br/>");
+        document.getElementById("quoteBox").style.display = "block";
+      } catch (e) {
+        showError(e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "1. Calculer avec AI (Convertir en Sats)";
+      }
+    }
+
+    async function createLightningInvoice() {
+      showError("");
+      const lightningAddress = document.getElementById("lnAddr").value.trim();
+      const memo = document.getElementById("orderText").value.trim();
+      if (!currentSats || currentSats < 1) return showError("Calculez d'abord le montant en sats.");
+
+      const btn = document.getElementById("btnInvoice");
+      btn.disabled = true;
+      btn.textContent = "Génération LNURL BOLT11...";
+
+      try {
+        const res = await fetch("/api/lightning/invoice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lightningAddress, amountSats: currentSats, memo }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Erreur LNURL");
+
+        currentBolt11 = data.bolt11;
+        document.getElementById("invSatsBadge").textContent = `${data.amountSats} sats`;
+        document.getElementById("qrContainer").innerHTML = data.qrSvg;
+        document.getElementById("bolt11Text").textContent = data.bolt11;
+        document.getElementById("invoiceCard").style.display = "block";
+      } catch (e) {
+        showError(e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "2. Générer Facture Lightning (BOLT11)";
+      }
+    }
+
+    function copyBolt11() {
+      if (!currentBolt11) return;
+      navigator.clipboard.writeText(currentBolt11);
+      alert("BOLT11 Invoice copié !");
+    }
+
+    async function payWithWebLN() {
+      if (!currentBolt11) return;
+      if (typeof window.webln === "undefined") {
+        return showError("Extension WebLN (ex: Alby) non détectée. Scannez le QR code avec Phoenix, Zeus ou Wallet of Satoshi.");
+      }
+      try {
+        await window.webln.enable();
+        const res = await window.webln.sendPayment(currentBolt11);
+        alert("Paiement réussi ! Preimage: " + (res.preimage || "OK"));
+      } catch (e) {
+        showError("Paiement WebLN annulé/échoué: " + e.message);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

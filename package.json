@@ -1,0 +1,21 @@
+{
+  "name": "sokosats-lightning-pos",
+  "version": "1.0.0",
+  "description": "Low-bandwidth AI Point-of-Sale & Real Lightning Merchant Terminal for Africa",
+  "main": "server.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node scripts/smoke_test.js"
+  },
+  "dependencies": {
+    "bip32": "^4.0.0",
+    "bip39": "^3.1.0",
+    "bitcoinjs-lib": "^6.1.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "lnurl-pay": "^5.0.2",
+    "qrcode": "^1.5.4",
+    "tiny-secp256k1": "^2.2.3"
+  }
+}
