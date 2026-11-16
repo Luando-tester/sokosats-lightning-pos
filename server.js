@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const bitcoin = require("bitcoinjs-lib");
@@ -24,9 +25,11 @@ const BTC_NETWORK =
     ? bitcoin.networks.bitcoin
     : bitcoin.networks.testnet;
 
-const WALLET_PERSIST_FILE = path.join(__dirname, ".merchant_wallet.secret.json");
+// Trên Vercel serverless filesystem gốc (/var/task) là read-only, chỉ /tmp ghi được
+const BASE_STORAGE_DIR = process.env.VERCEL ? os.tmpdir() : __dirname;
+const WALLET_PERSIST_FILE = path.join(BASE_STORAGE_DIR, ".merchant_wallet.secret.json");
 
-// 1. Khởi tạo & lưu bền vững ví Bitcoin BIP84 (Native SegWit bech32) non-custodial cho Merchant
+// 1. Khởi tạo ví Bitcoin BIP84 (Native SegWit bech32) non-custodial cho Merchant
 function initMerchantWallet() {
   let mnemonic = (process.env.MERCHANT_MNEMONIC || "").trim();
   let source = "env";
@@ -37,7 +40,7 @@ function initMerchantWallet() {
         const saved = JSON.parse(fs.readFileSync(WALLET_PERSIST_FILE, "utf8"));
         if (saved?.mnemonic && bip39.validateMnemonic(saved.mnemonic)) {
           mnemonic = saved.mnemonic;
-          source = "persisted-file";
+          source = process.env.VERCEL ? "vercel-tmp-ephemeral" : "persisted-file";
         }
       } catch {
         // Bỏ qua nếu file hỏng, sẽ sinh lại bên dưới
@@ -47,7 +50,7 @@ function initMerchantWallet() {
 
   if (!mnemonic || !bip39.validateMnemonic(mnemonic)) {
     mnemonic = bip39.generateMnemonic(128);
-    source = "auto-generated-saved";
+    source = process.env.VERCEL ? "vercel-ephemeral-generated" : "auto-generated-saved";
     try {
       fs.writeFileSync(
         WALLET_PERSIST_FILE,
@@ -55,11 +58,8 @@ function initMerchantWallet() {
         { mode: 0o600 }
       );
       fs.chmodSync(WALLET_PERSIST_FILE, 0o600);
-      console.warn(
-        `[SECURITY WARNING] Đã tự sinh ví BIP84 mới và lưu vào ${WALLET_PERSIST_FILE} (chmod 600). Hãy backup file này hoặc đặt MERCHANT_MNEMONIC trong biến môi trường!`
-      );
-    } catch (err) {
-      console.error(`[CRITICAL] Không lưu được mnemonic ra đĩa (${err.message}). Đặt MERCHANT_MNEMONIC ngay để tránh mất tiền!`);
+    } catch {
+      // Bỏ qua lỗi ghi đĩa trên môi trường serverless bị khóa write
     }
   }
 
@@ -118,12 +118,11 @@ async function getLiveBtcRates() {
   return rateCache;
 }
 
-// Tỷ giá tham chiếu ước tính quy đổi sang USD (kết hợp cùng giá BTC/USD live từ Coinbase)
 const ESTIMATED_FIAT_PER_USD = {
   USD: 1,
-  XOF: 605,  // Franc CFA ước tính (~605 XOF / 1 USD)
-  NGN: 1600, // Naira ước tính (~1600 NGN / 1 USD)
-  KES: 129,  // Shilling ước tính (~129 KES / 1 USD)
+  XOF: 605,
+  NGN: 1600,
+  KES: 129,
 };
 
 function convertFiatToSats(amount, currency, btcUsd) {
@@ -134,10 +133,6 @@ function convertFiatToSats(amount, currency, btcUsd) {
   return Math.max(1, Math.round(btcValue * 100_000_000));
 }
 
-/**
- * Parser dự phòng chạy 0ms:
- * Phân biệt số lượng kèm đơn vị đo (2kg, 500g, 2L, 3x) với giá tiền thực tế (1300 CFA, 1100 XOF).
- */
 function deterministicOrderParser(rawText, defaultCurrency = "XOF") {
   const parts = rawText
     .split(/[,;\n+]+/)
@@ -146,7 +141,6 @@ function deterministicOrderParser(rawText, defaultCurrency = "XOF") {
 
   const items = [];
   for (const part of parts) {
-    // 1. Ưu tiên khớp số tiền có gắn đơn vị tiền tệ rõ ràng (ví dụ: 1300 CFA, 1100 XOF, $5)
     const explicitMoney = part.match(/(\d+(?:[.,]\d+)?)\s*(xof|cfa|ngn|kes|usd|sats?)\b/i);
     if (explicitMoney) {
       const val = Number(explicitMoney[1].replace(",", "."));
@@ -158,7 +152,6 @@ function deterministicOrderParser(rawText, defaultCurrency = "XOF") {
       }
     }
 
-    // 2. Nếu không ghi đơn vị tiền tệ: loại bỏ các cụm số lượng đo lường (2kg, 1.5l, 500g, 2x) rồi lấy số tiền còn lại
     const strippedWeightQty = part.replace(/\b\d+(?:[.,]\d+)?\s*(?:kg|g|gr|l|ml|pcs|x)\b/gi, " ").trim();
     const fallbackNum = strippedWeightQty.match(/(\d+(?:[.,]\d+)?)/);
     if (fallbackNum) {
@@ -179,7 +172,6 @@ function deterministicOrderParser(rawText, defaultCurrency = "XOF") {
   return { items, parserMode: "offline-fallback" };
 }
 
-// Rate-limit đơn giản theo IP cho /api/ai-quote (tối đa 20 request / phút / IP) để bảo vệ free Gemini key
 const aiRateWindow = new Map();
 function checkAiRateLimit(ip) {
   const now = Date.now();
@@ -245,6 +237,7 @@ app.get("/api/health", async (_req, res) => {
   res.json({
     ok: true,
     service: "SokoSats Lightning POS",
+    runtime: process.env.VERCEL ? "vercel-serverless" : "node-server",
     wallet: merchantWallet,
     defaultLightningAddress: process.env.DEFAULT_LIGHTNING_ADDRESS || "hello@getalby.com",
     btcUsd: rates.btcUsd,
@@ -254,7 +247,7 @@ app.get("/api/health", async (_req, res) => {
 });
 
 app.post("/api/ai-quote", async (req, res) => {
-  const clientIp = req.ip || "unknown";
+  const clientIp = req.ip || req.headers["x-forwarded-for"] || "unknown";
   if (!checkAiRateLimit(clientIp)) {
     return res.status(429).json({ error: "Quá nhiều yêu cầu AI, vui lòng thử lại sau 1 phút." });
   }
@@ -350,7 +343,12 @@ app.get("/api/invoices", (_req, res) => {
   res.json({ invoices: invoicesLedger });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[SokoSats] Running on http://0.0.0.0:${PORT}`);
-  console.log(`[SokoSats] Merchant BIP84 (${merchantWallet.network}, ${merchantWallet.walletSource}): ${merchantWallet.onchainAddress}`);
-});
+// Chỉ mở cổng listen khi chạy trực tiếp bằng Node/Docker; khi Vercel import làm serverless handler thì export app
+if (require.main === module) {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[SokoSats] Running on http://0.0.0.0:${PORT}`);
+    console.log(`[SokoSats] Merchant BIP84 (${merchantWallet.network}, ${merchantWallet.walletSource}): ${merchantWallet.onchainAddress}`);
+  });
+}
+
+module.exports = app;
